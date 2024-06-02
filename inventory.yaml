@@ -1,0 +1,12 @@
+external_host:
+    hosts:
+        EXTERNAL_HOST_IP
+internal_host_dns:
+    hosts:
+        INTERNAL_HOST_DNS_IP
+internal_host_web:
+    hosts:
+        INTERNAL_HOST_WEB_IP
+internal_host_mail:
+    hosts:
+        INTERNAL_HOST_MAIL_IP

@@ -1,0 +1,539 @@
+---  # {{SITE}}_setup
+#- name: external-host-preconfigure
+#  hosts: external_host
+#  remote_user: {{USERNAME}}
+#  vars:
+#    ansible_port: '22'
+#    ansible_ssh_private_key_file: 'keys/{{SITE}}-key_external'
+#  tasks:
+#    - name: ping Host
+#      ansible.builtin.ping:
+#    - name: Move SSH Port
+#      ansible.builtin.shell: sed -i 's/#Port 22/Port 20022/' /etc/ssh/sshd_config && service ssh restart
+#      become: true
+#    - name: Wait for Service Restart
+#      ansible.builtin.shell: sleep 3
+#      delegate_to: localhost
+
+- name: external-host
+  hosts: external_host
+  remote_user: {{USERNAME}}
+  vars:
+    ansible_port: '20022'
+    ansible_ssh_private_key_file: 'keys/{{SITE}}-key_external'
+  tasks:
+    - name: ping Host
+      ansible.builtin.ping:
+
+#    - name: Retrieve Public Onion Service Name
+#      ansible.builtin.shell: sudo cat $(sudo find /var/lib/tor -name *onion)/hostname
+#      register: servicename
+#    - debug:
+#        msg: "{{ '{{' }} servicename.stdout_lines {{ '}}' }}"
+#
+    - name: Get Internal MAC Address
+      ansible.builtin.shell: "ip -br link show dev eth1 | awk '{print $3;}'"
+      register: internal_mac
+
+    - name: Configure External Network (Enable Forwarding)
+      ansible.builtin.shell: sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf && sudo sysctl -p && iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+      become: true
+
+    - name: GET VARIABLE | EXTERNAL_VM-PUBLIC_IP
+      command: terraform output -raw {{SITE}}-ip_public
+      register: external_vm_public_ip
+      run_once: true
+      delegate_to: localhost
+    - debug:
+        msg: "{{ '{{' }} external_vm_public_ip.stdout_lines {{ '}}' }}"
+
+    - name: GET VARIABLE | EXTERNAL_VM-PRIVATE_IP
+      command: terraform output -raw {{SITE}}-ip_ext_private
+      register: external_vm_private_ip
+      run_once: true
+      delegate_to: localhost
+    - debug:
+        msg: "{{ '{{' }} external_vm_private_ip.stdout_lines {{ '}}' }}"
+
+    - name: GET VARIABLE | DNS_VM-IP
+      command: terraform output -raw {{SITE}}-ip_dns
+      register: dns_vm_private_ip
+      run_once: true
+      delegate_to: localhost
+    - debug:
+        msg: "{{ '{{' }} dns_vm_private_ip.stdout_lines {{ '}}' }}"
+
+    - name: GET VARIABLE | WEB_VM-IP
+      command: terraform output -raw {{SITE}}-ip_web
+      register: web_vm_private_ip
+      run_once: true
+      delegate_to: localhost
+    - debug:
+        msg: "{{ '{{' }} web_vm_private_ip.stdout_lines {{ '}}' }}"
+
+    - name: GET VARIABLE | MAIL_VM-IP
+      command: terraform output -raw {{SITE}}-ip_mail
+      register: mail_vm_private_ip
+      run_once: true
+      delegate_to: localhost
+    - debug:
+        msg: "{{ '{{' }} mail_vm_private_ip.stdout_lines {{ '}}' }}"
+
+    - name: GET VARIABLE | CLIENT_VM-IP
+      command: terraform output -raw {{SITE}}-ip_client
+      register: client_vm_private_ip
+      run_once: true
+      delegate_to: localhost
+    - debug:
+        msg: "{{ '{{' }} client_vm_private_ip.stdout_lines {{ '}}' }}"
+
+    - name: GET VARIABLE | DNS_VM-SSH_ACCESS_PORT
+      command: echo 10001
+      register: ssh_destport_external_dns
+      run_once: true
+      delegate_to: localhost
+
+    - name: GET VARIABLE | WEB_VM-SSH_ACCESS_PORT
+      command: echo 10002
+      register: ssh_destport_external_web
+      run_once: true
+      delegate_to: localhost
+
+    - name: GET VARIABLE | MAIL_VM-SSH_ACCESS_PORT
+      command: echo 10003
+      register: ssh_destport_external_mail
+      run_once: true
+      delegate_to: localhost
+
+    - name: PORT FORWARD | SYSCTL_ENABLE
+      ansible.builtin.shell: sudo sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf && sudo sysctl -p
+      run_once: true
+
+    - name: PORT FORWARD | SSH | INBOUND | TO-DNS_SERVER
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: PREROUTING
+        destination: "{{ '{{' }} external_vm_{{PARADIGM}}_ip.stdout {{ '}}' }}"
+        protocol: tcp
+        destination_port: "{{ '{{' }} ssh_destport_external_dns.stdout {{ '}}' }}"
+        jump: DNAT
+        to_destination: "{{ '{{' }} dns_vm_private_ip.stdout {{ '}}' }}:22"
+      become: true
+      run_once: true
+
+    - name: PORT FORWARD | SSH | OUTBOUND | FROM-DNS_SERVER
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: POSTROUTING
+        destination: "{{ '{{' }} dns_vm_private_ip.stdout {{ '}}' }}"
+        protocol: tcp
+        destination_port: 22
+        jump: SNAT
+        to_source: "{{ '{{' }} external_vm_private_ip.stdout {{ '}}' }}"
+      become: true
+      run_once: true
+
+    - name: PORT FORWARD | DNS | INBOUND | TO-DNS_SERVER
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: PREROUTING
+        destination: "{{ '{{' }} external_vm_{{PARADIGM}}_ip.stdout {{ '}}' }}"
+        protocol: udp
+        destination_port: 53
+        jump: DNAT
+        to_destination: "{{ '{{' }} dns_vm_private_ip.stdout {{ '}}' }}:53"
+      become: true
+      run_once: true
+
+    - name: PORT FORWARD | DNS | OUTBOUND | FROM-DNS_SERVER
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: POSTROUTING
+        destination: "{{ '{{' }} dns_vm_private_ip.stdout {{ '}}' }}"
+        protocol: udp
+        destination_port: 53
+        jump: SNAT
+        to_source: "{{ '{{' }} external_vm_private_ip.stdout {{ '}}' }}"
+      become: true
+      run_once: true
+
+    - name: PORT FORWARD | SSH | INBOUND | TO-WEB_SERVER
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: PREROUTING
+        destination: "{{ '{{' }} external_vm_{{PARADIGM}}_ip.stdout {{ '}}' }}"
+        protocol: tcp
+        destination_port: "{{ '{{' }} ssh_destport_external_web.stdout {{ '}}' }}"
+        jump: DNAT
+        to_destination: "{{ '{{' }} web_vm_private_ip.stdout {{ '}}' }}:22"
+      become: true
+      run_once: true
+
+    - name: PORT FORWARD | SSH | OUTBOUND | FROM-WEB_SERVER
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: POSTROUTING
+        destination: "{{ '{{' }} web_vm_private_ip.stdout {{ '}}' }}"
+        protocol: tcp
+        destination_port: 22
+        jump: SNAT
+        to_source: "{{ '{{' }} external_vm_private_ip.stdout {{ '}}' }}"
+      become: true
+      run_once: true
+
+    - name: PORT FORWARD | HTTP | INBOUND | TO-WEB_SERVER
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: PREROUTING
+        destination: "{{ '{{' }} external_vm_{{PARADIGM}}_ip.stdout {{ '}}' }}"
+        protocol: tcp
+        destination_port: 80
+        jump: DNAT
+        to_destination: "{{ '{{' }} web_vm_private_ip.stdout {{ '}}' }}:80"
+      become: true
+      run_once: true
+
+    - name: PORT FORWARD | HTTP | OUTBOUND | FROM-WEB_SERVER
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: POSTROUTING
+        destination: "{{ '{{' }} web_vm_private_ip.stdout {{ '}}' }}"
+        protocol: tcp
+        destination_port: 80
+        jump: SNAT
+        to_source: "{{ '{{' }} external_vm_private_ip.stdout {{ '}}' }}"
+      become: true
+      run_once: true
+
+    - name: PORT FORWARD | HTTPS | INBOUND | TO-WEB_SERVER
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: PREROUTING
+        destination: "{{ '{{' }} external_vm_{{PARADIGM}}_ip.stdout {{ '}}' }}"
+        protocol: tcp
+        destination_port: 443
+        jump: DNAT
+        to_destination: "{{ '{{' }} web_vm_private_ip.stdout {{ '}}' }}:443"
+      become: true
+      run_once: true
+
+    - name: PORT FORWARD | HTTPS | OUTBOUND | FROM-WEB_SERVER
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: POSTROUTING
+        destination: "{{ '{{' }} web_vm_private_ip.stdout {{ '}}' }}"
+        protocol: tcp
+        destination_port: 443
+        jump: SNAT
+        to_source: "{{ '{{' }} external_vm_private_ip.stdout {{ '}}' }}"
+      become: true
+      run_once: true
+
+    - name: PORT FORWARD | SSH | INBOUND | TO-MAIL_SERVER
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: PREROUTING
+        destination: "{{ '{{' }} external_vm_{{PARADIGM}}_ip.stdout {{ '}}' }}"
+        protocol: tcp
+        destination_port: "{{ '{{' }} ssh_destport_external_mail.stdout {{ '}}' }}"
+        jump: DNAT
+        to_destination: "{{ '{{' }} mail_vm_private_ip.stdout {{ '}}' }}:22"
+      become: true
+      run_once: true
+
+    - name: PORT FORWARD | SSH | OUTBOUND | FROM-MAIL_SERVER
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: POSTROUTING
+        destination: "{{ '{{' }} mail_vm_private_ip.stdout {{ '}}' }}"
+        protocol: tcp
+        destination_port: 22
+        jump: SNAT
+        to_source: "{{ '{{' }} external_vm_private_ip.stdout {{ '}}' }}"
+      become: true
+      run_once: true
+
+    - name: PORT FORWARD | RDP | INBOUND | TO-CLIENT
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: PREROUTING
+        destination: "{{ '{{' }} external_vm_{{PARADIGM}}_ip.stdout {{ '}}' }}"
+        protocol: tcp
+        destination_port: 3389
+        jump: DNAT
+        to_destination: "{{ '{{' }} client_vm_private_ip.stdout {{ '}}' }}:3389"
+      become: true
+      run_once: true
+
+    - name: PORT FORWARD | RDP | OUTBOUND | FROM-CLIENT
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: POSTROUTING
+        destination: "{{ '{{' }} client_vm_private_ip.stdout {{ '}}' }}"
+        protocol: tcp
+        destination_port: 3389
+        jump: SNAT
+        to_source: "{{ '{{' }} external_vm_private_ip.stdout {{ '}}' }}"
+      become: true
+      run_once: true
+
+    - name: PORT FORWARD | SSH | INBOUND | TO-CLIENT
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: PREROUTING
+        destination: "{{ '{{' }} external_vm_{{PARADIGM}}_ip.stdout {{ '}}' }}"
+        protocol: tcp
+        destination_port: 22
+        jump: DNAT
+        to_destination: "{{ '{{' }} client_vm_private_ip.stdout {{ '}}' }}:22"
+      become: true
+      run_once: true
+
+    - name: PORT FORWARD | SSH | OUTBOUND | FROM-CLIENT
+      ansible.builtin.iptables:
+        table: nat
+        action: insert
+        chain: POSTROUTING
+        destination: "{{ '{{' }} client_vm_private_ip.stdout {{ '}}' }}"
+        protocol: tcp
+        destination_port: 22
+        jump: SNAT
+        to_source: "{{ '{{' }} external_vm_private_ip.stdout {{ '}}' }}"
+      become: true
+      run_once: true
+
+    - name: Save Firewall Rules
+      ansible.builtin.shell: iptables-save > /etc/iptables/rules.v4
+      become: true
+
+- name: dns-host
+  hosts: internal_host_dns
+  remote_user: {{USERNAME}}
+  vars:
+    ansible_port: '10001'
+    ansible_ssh_private_key_file: 'keys/{{SITE}}-key_internal_dns'
+  tasks:
+    - name: ping Host
+      ansible.builtin.ping:
+
+{% if PROVIDER == "digitalocean" %}
+    - name: Remove Public Network
+      ansible.builtin.shell: "sed -i '10,23d' /etc/network/interfaces && sed -i '9,24d' /etc/netplan/50-cloud-init.yaml && ip -4 address flush dev eth0 && ip link set dev eth0 down && echo 1 > '/sys/devices/pci0000:00/0000:00:03.0/remove' && ip -4 route add default via {{ '{{' }} external_vm_private_ip.stdout {{ '}}' }} dev eth1"
+      run_once: true
+{% endif %}
+
+#    - name: Install unbound DNS Server
+#      ansible.builtin.apt:
+#        update-cache: yes
+#        name:
+#          - unbound
+#          - unbound-anchor
+#          - dns-root-data
+#      become: true
+#      run_once: true
+
+    - name: Populate DNS Zone File Configuration
+      ansible.builtin.shell: sed -i "s/EXTERNAL_IP/$(terraform output -raw {{SITE}}-ip_public)/" ./content/dns/_etc_unbound_unbound.conf.d_{{SITE}}-zone.conf ; sed -i "s/MAIL_IP/$(terraform output -raw {{SITE}}-ip_mail)/" ./content/dns/_etc_unbound_unbound.conf.d_{{SITE}}-zone.conf
+      delegate_to: localhost
+
+    - name: Send DNS Zone File Configuration
+      ansible.builtin.copy:
+        src: ./content/dns/_etc_unbound_unbound.conf.d_{{SITE}}-zone.conf
+        dest: /etc/unbound/unbound.conf.d/{{SITE}}-zone.conf
+        owner: root
+        group: root
+        mode: '0644'
+      become: true
+
+    - name: Populate DNS Resolver Configuration
+      ansible.builtin.shell: sed -i "s/DNS_IP/$(terraform output -raw {{SITE}}-ip_dns)/" ./content/common/resolv.conf
+      delegate_to: localhost
+
+    - name: Send DNS Resolver Configuration
+      ansible.builtin.copy:
+        src: ./content/common/resolv.conf
+        dest: /root/
+        owner: root
+        group: root
+        mode: '0644'
+      become: true
+
+#    - name: Send File - chroot fstab tail
+#      ansible.builtin.copy:
+#        src: ./content/dns/_etc_fstab
+#        dest: /root/fstab
+#        owner: root
+#        group: root
+#        mode: '0644'
+#      become: true
+
+#    - name: Send File - Updated AppArmor Profile
+#      ansible.builtin.copy:
+#        src: ./content/dns/_etc_apparmor.d_usr.sbin.unbound
+#        dest: /etc/apparmor.d/usr.sbin.unbound
+#        owner: root
+#        group: root
+#        mode: '0644'
+#      become: true
+
+#    - name: Restart AppArmor Service
+#      ansible.builtin.shell: service apparmor restart
+#      become: true
+
+
+#    - name: Restart DNS Server
+#      ansible.builtin.shell: service unbound restart
+#      become: true
+
+#    - name: Prepare DNS Service Environment
+#      ansible.builtin.shell: mkdir -p /etc/unbound/dev /etc/unbound/var/lib/unbound ; touch /etc/unbound/dev/urandom /etc/unbound/dev/log /etc/unbound/unbound.log /etc/unbound/unbound.pid ; chown unbound:unbound /etc/unbound/unbound.log /etc/unbound/unbound.pid ; chown -R unbound:unbound ./unbound/  ; ln -s /etc/unbound/unbound.log /var/log/unbound.log ; cp /var/lib/unbound/root.key /etc/unbound/var/lib/unbound/ ; cp /usr/share/dns/root.hints /etc/unbound/unbound.conf.d/named.root ; cat /root/fstab >> /etc/fstab ; mount -a
+#      become: true
+
+#    - name: Move DNSSEC Trust Anchor Configuration   TODO FIX THIS - THIS JUST BROKE ONE DAY AND I DONT KNOW WHY
+#      ansible.builtin.shell: mv /etc/unbound/unbound.conf.d/root-auto-trust-anchor-file.conf /root
+#      become: true
+#      run_once: true
+
+    - name: Disable systemd-resolved Service - Start Unbound DNS Service
+      ansible.builtin.shell: systemctl disable systemd-resolved.service ; systemctl stop systemd-resolved.service ; systemctl enable unbound.service ; service apparmor restart ; service unbound restart
+      become: true
+
+    - name: Configure Local DNS Resolver
+      ansible.builtin.shell: echo nameserver 127.0.0.1 > /etc/resolv.conf ; echo search {{SITE}}.test >> /etc/resolv.conf ; echo $(ip -4 address show dev $(ip -4 route show default | grep -o dev.* | awk '{print $2;}') | grep inet | awk '{print $2}' | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}') $(hostname) >> /etc/hosts
+      become: true
+
+- name: web-host
+  hosts: internal_host_web
+  remote_user: {{USERNAME}}
+  vars:
+    ansible_port: '10002'
+    ansible_ssh_private_key_file: 'keys/{{SITE}}-key_internal_web'
+  tasks:
+    - name: ping Host
+      ansible.builtin.ping:
+
+{% if TF_PROVIDER == "aws" %}
+    - name: Remove Public Network
+      ansible.builtin.shell: "sed -i '10,23d' /etc/network/interfaces && sed -i '9,24d' /etc/netplan/50-cloud-init.yaml && ip -4 address flush dev eth0 && ip link set dev eth0 down && echo 1 > '/sys/devices/pci0000:00/0000:00:03.0/remove' && ip -4 route add default via {{ external_vm_private_ip.stdout }} dev eth1"
+      run_once: true
+{% endif %}
+
+    - name: Populate DNS Resolver Configuration
+      ansible.builtin.shell: sed -i "s/DNS_IP/$(terraform output -raw {{SITE}}-ip_dns)/" ./content/common/resolv.conf
+      delegate_to: localhost
+
+    - name: Send File - resolv.conf
+      ansible.builtin.copy:
+        src: ./content/common/resolv.conf
+        dest: /root/
+        owner: root
+        group: root
+        mode: '0644'
+      become: true
+
+    - name: Configure Local DNS Resolver
+      ansible.builtin.shell: systemctl disable systemd-resolved.service ; service systemd-resolved stop ; cp ~/resolv.conf /etc/resolv.conf ; echo $(ip -4 address show dev $(ip -4 route show default | grep -o dev.* | awk '{print $2;}') | grep inet | awk '{print $2}' | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}') $(hostname) >> /etc/hosts
+      become: true
+
+#    - name: Install nginx Web Server
+#      ansible.builtin.apt:
+#        update-cache: yes
+#        name:
+#          - nginx-light
+#      become: true
+#      run_once: true
+
+#    - name: Send Website Content
+#      ansible.builtin.copy:
+#        src: ./content/web/{{SITE}}-webcontent.tar.gz
+#        dest: /var/www/html/
+#        owner: root
+#        group: root
+#        mode: '0644'
+#      become: true
+
+#    - name: Extract Website Content
+#      ansible.builtin.shell: tar zxf /var/www/html/{{SITE}}-webcontent.tar.gz -C /var/www/html
+#      become: true
+
+- name: mail-host
+  hosts: internal_host_mail
+  remote_user: {{USERNAME}}
+  vars:
+    ansible_port: '10003'
+    ansible_ssh_private_key_file: 'keys/{{SITE}}-key_internal_mail'
+  tasks:
+    - name: ping Host
+      ansible.builtin.ping:
+
+{% if TF_PROVIDER == "aws" %}
+    - name: Remove Public Network
+      ansible.builtin.shell: "sed -i '10,23d' /etc/network/interfaces && sed -i '9,24d' /etc/netplan/50-cloud-init.yaml && ip -4 address flush dev eth0 && ip link set dev eth0 down && echo 1 > '/sys/devices/pci0000:00/0000:00:03.0/remove' && ip -4 route add default via {{ external_vm_private_ip.stdout }} dev eth1"
+      run_once: true
+{% endif %}
+
+    - name: Populate DNS Resolver Configuration
+      ansible.builtin.shell: sed -i "s/DNS_IP/$(terraform output -raw {{SITE}}-ip_dns)/" ./content/common/resolv.conf
+      delegate_to: localhost
+
+    - name: Send File - resolv.conf
+      ansible.builtin.copy:
+        src: ./content/common/resolv.conf
+        dest: /root/
+        owner: root
+        group: root
+        mode: '0644'
+      become: true
+
+    - name: Configure Local DNS Resolver
+      ansible.builtin.shell: systemctl disable systemd-resolved.service ; service systemd-resolved stop ; cp ~/resolv.conf /etc/resolv.conf ; echo $(ip -4 address show dev $(ip -4 route show default | grep -o dev.* | awk '{print $2;}') | grep inet | awk '{print $2}' | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}') $(hostname) >> /etc/hosts
+      become: true
+
+#    - name: Install Package Dependencies
+#      ansible.builtin.apt:
+#        update-cache: yes
+#        name:
+#          - dialog
+#      become: true
+#      run_once: true
+
+#    - name: Download Mail Packages
+#      ansible.builtin.shell: wget https://github.com/iredmail/iRedMail/archive/refs/tags/1.6.8.tar.gz ; mv ./1.6.8.tar.gz /root/ ; cd /root ; tar zxf ./1.6.8.tar.gz ; cd iRedMail-1.6.8
+#      become: true
+#      run_once: true
+
+#    - name: Send File - config
+#      ansible.builtin.copy:
+#        src: ./content/mail/config
+#        dest: /root/iRedMail-1.6.8/
+#        owner: root
+#        group: root
+#        mode: '0644'
+#        become: true
+
+    - name: Configure Hostname
+      ansible.builtin.shell: echo mail > /etc/hostname ; sed -i 's/localhost/mail.{{SITE}}.test mail/g' /etc/hosts ; hostname --file /etc/hostname
+      become: true
+
+    - name: Setup Mail Server
+      ansible.builtin.shell: cd /root/iRedMail-1.6.8 ; AUTO_USE_EXISTING_CONFIG_FILE=y AUTO_INSTALL_WITHOUT_CONFIRM=y AUTO_CLEANUP_REMOVE_SENDMAIL=y AUTO_CLEANUP_REPLACE_FIREWALL_RULES=n AUTO_CLEANUP_RESTART_FIREWALL=n AUTO_CLEANUP_REPLACE_MYSQL_CONFIG=y bash iRedMail.sh
+      become: true
+
+    - name: Reboot Instance
+      ansible.builtin.reboot:
+        reboot_command: sudo reboot

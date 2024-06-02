@@ -1,0 +1,79 @@
+TODO:
+        robustify the site-naming (i.e. in 'start.sh', and in each filename, and the README)
+        add TOR script back into public instance packer script
+        clean-up ansible template (remove commented-out lines)  (also check other files and clean-up)
+        fix Makefile (site configurations need to happen with Ansible now)
+
+
+NOTES:
+        AMI stuff:
+                Find Owner:  aws sts get-caller-identity
+                List:        aws ec2 describe-images --filter "Name=owner-id,Values=184568259763"                
+                Deregister:  aws ec2 deregister-image --image-id ami-0e7e8142621c4fb05
+                Delete all:  for image in $(aws ec2 describe-images --filter "Name=owner-id,Values=184568259763" | jq '.Images[].ImageId' | tr -d '"'); do aws ec2 deregister-image --image-id $image; done
+
+
+tor-gitlab-setup-snippet:
+        #!/bin/bash
+        systemctl enable ssh.service
+        systemctl start ssh.service
+        iptables -P INPUT -j ACCEPT
+        iptables -P OUTPUT -j ACCEPT
+        iptables -F
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y curl openssh-server ca-certificates perl tor torsocks postfix
+        curl https://packages.gitlab.com/install/repositories/gitlab/gitlab-ee/script.deb.sh | sudo bash
+        apt-get install -y build-essential git autoconf libsodium-dev
+        git clone https://github.com/cathugger/mkp224o
+        cd mkp224o
+        ./autogen.sh
+        ./configure
+        make
+        ./mkp224o sitea -x -d /var/lib/tor/ -n 1
+        cd ~
+        echo HiddenServiceDir $(find /var/lib/tor -name *onion)/ >> /etc/tor/torrc
+        echo HiddenServicePort 22 127.0.0.1:22 >> /etc/tor/torrc
+        echo HiddenServicePort 80 127.0.0.1:80 >> /etc/tor/torrc
+        echo HiddenServicePort 443 127.0.0.1:443 >> /etc/tor/torrc
+        chown -R debian-tor:debian-tor /var/lib/tor/
+        systemctl enable tor.service
+        service tor restart
+        # sudo EXTERNAL_URL="https://$(find /var/lib/tor -name *onion)" GITLAB_ROOT_PASSWORD="password" GITLAB_SIGNUP_ENABLED="false" apt-get install gitlab-ee
+        EOF
+
+
+consul-notes:
+
+***Install Consul Repo
+
+wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+sudo apt update && sudo apt install consul
+
+***Start Consul Server Agent (dev-mode)
+consul agent -dev -server -advertise '{{ GetInterfaceIP "eth0" }}'
+
+
+***Modify Security Group Rules (tcp/8300, 8301, 8302, 8500, 8502, 8503, 8600)
+
+***Add iptables forwarding rules
+iptables -t nat -I PREROUTING -d $EXTERNAL_HOST -p tcp -m tcp --dport 8500 -j DNAT --to-destination $CONSUL_AGENT_SERVER:8500
+iptables -t nat -I POSTROUTING -d $CONSUL_AGENT_SERVER -p tcp -m tcp --dport 8500 -j SNAT --to-source $EXTERNAL_HOST
+iptables -t nat -I PREROUTING -d $EXTERNAL_HOST -p tcp -m tcp --dport 8600 -j DNAT --to-destination $CONSUL_AGENT_SERVER:8600
+iptables -t nat -I POSTROUTING -d $CONSUL_AGENT_SERVER -p tcp -m tcp --dport 8600 -j SNAT --to-source $EXTERNAL_HOST
+iptables -t nat -I PREROUTING -d $EXTERNAL_HOST -p tcp -m tcp --dport 8300 -j DNAT --to-destination $CONSUL_AGENT_SERVER:8300
+iptables -t nat -I POSTROUTING -d $CONSUL_AGENT_SERVER -p tcp -m tcp --dport 8300 -j SNAT --to-source $EXTERNAL_HOST
+iptables -t nat -I PREROUTING -d $EXTERNAL_HOST -p tcp -m tcp --dport 8301 -j DNAT --to-destination $CONSUL_AGENT_SERVER:8301
+iptables -t nat -I POSTROUTING -d $CONSUL_AGENT_SERVER -p tcp -m tcp --dport 8301 -j SNAT --to-source $EXTERNAL_HOST
+iptables -t nat -I PREROUTING -d $EXTERNAL_HOST -p tcp -m tcp --dport 8302 -j DNAT --to-destination $CONSUL_AGENT_SERVER:8302
+iptables -t nat -I POSTROUTING -d $CONSUL_AGENT_SERVER -p tcp -m tcp --dport 8302 -j SNAT --to-source $EXTERNAL_HOST
+iptables -t nat -I PREROUTING -d $EXTERNAL_HOST -p tcp -m tcp --dport 8502 -j DNAT --to-destination $CONSUL_AGENT_SERVER:8502
+iptables -t nat -I POSTROUTING -d $CONSUL_AGENT_SERVER -p tcp -m tcp --dport 8502 -j SNAT --to-source $EXTERNAL_HOST
+iptables -t nat -I PREROUTING -d $EXTERNAL_HOST -p tcp -m tcp --dport 8503 -j DNAT --to-destination $CONSUL_AGENT_SERVER:8503
+iptables -t nat -I POSTROUTING -d $CONSUL_AGENT_SERVER -p tcp -m tcp --dport 8503 -j SNAT --to-source $EXTERNAL_HOST
+
+
+***Start local agent
+consul agent -dev -client 192.168.2.43
+
+***

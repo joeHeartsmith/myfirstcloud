@@ -1,0 +1,279 @@
+packer {
+  required_plugins {
+{% if TF_PROVIDER == "aws" %}
+    amazon = {
+{% elif TF_PROVIDER == "digitalocean" %}
+    digitalocean = {
+{% endif %}
+      version = "~> 1"
+{% if TF_PROVIDER == "aws" %}
+      source  = "github.com/hashicorp/amazon"
+{% elif TF_PROVIDER == "digitalocean" %}
+      source  = "github.com/hashicorp/digitalocean"
+{% endif %}
+    }
+  }
+}
+
+locals { timestamp = regex_replace(timestamp(), "[- TZ:]", "") }
+
+# Public-Facing Instance
+{% if TF_PROVIDER == "aws" %}
+source "amazon-ebs" "{{SITE}}_external" {
+{% elif TF_PROVIDER == "digitalocean" %}
+source "digitalocean" "{{SITE}}_external" {
+{% endif %}
+
+{% if TF_PROVIDER == "aws" %}
+  ami_name      = "{{SITE}}-external-${local.timestamp}"
+  instance_type = "{{INSTANCE_TYPE_PUBLIC}}"
+  access_key    = "{{API_KEY_1}}"
+  secret_key    = "{{API_KEY_2}}"
+{% elif TF_PROVIDER == "digitalocean" %}
+  snapshot_name = "{{SITE}}-external-${local.timestamp}"
+  image         = "{{IMAGE_PUBLIC}}"
+  size          = "{{INSTANCE_TYPE_PUBLIC}}"
+  api_token     = "{{API_KEY_1}}"
+{% endif %}
+  region        = "{{TF_REGION}}"
+  ssh_username  = "{{USERNAME}}"
+
+{% if TF_PROVIDER == "aws" %}
+  source_ami_filter {
+    filters = {
+      image-id            = "{{IMAGE_PUBLIC}}"
+      root-device-type    = "ebs"
+      virtualization-type = "hvm"
+    }
+    most_recent = true
+    owners      = ["136693071363"]  # Amazon
+  }
+{% endif %}
+}
+
+build {
+{% if TF_PROVIDER == "aws" %}
+  sources = ["source.amazon-ebs.{{SITE}}_external"]
+{% elif TF_PROVIDER == "digitalocean" %}
+  sources = ["source.digitalocean.{{SITE}}_external"]
+{% endif %}
+  provisioner "file" {
+    source      = "./keys/{{SITE}}-key_external.pub"
+    destination = "/tmp/{{SITE}}-key_external.pub"
+  }
+  provisioner "shell" {
+    script = "./content/public/packer-script.sh"
+  }
+}
+
+# DNS Instance
+{% if TF_PROVIDER == "aws" %}
+source "amazon-ebs" "{{SITE}}_internal_dns" {
+{% elif TF_PROVIDER == "digitalocean" %}
+source "digitalocean" "{{SITE}}_internal_dns" {
+{% endif %}
+
+{% if TF_PROVIDER == "aws" %}
+  ami_name      = "{{SITE}}-internal-dns-${local.timestamp}"
+  instance_type = "{{INSTANCE_TYPE_DNS}}"
+  access_key    = "{{API_KEY_1}}"
+  secret_key    = "{{API_KEY_2}}"
+{% elif TF_PROVIDER == "digitalocean" %}
+  snapshot_name = "{{SITE}}-internal-dns-${local.timestamp}"
+  image         = "{{IMAGE_DNS}}"
+  size          = "{{INSTANCE_TYPE_DNS}}"
+  api_token     = "{{API_KEY_1}}"
+{% endif %}
+  region        = "{{TF_REGION}}"
+  ssh_username  = "{{USERNAME}}"
+
+{% if TF_PROVIDER == "aws" %}
+  source_ami_filter {
+    filters = {
+      image-id            = "{{IMAGE_DNS}}"
+      root-device-type    = "ebs"
+      virtualization-type = "hvm"
+    }
+    most_recent = true
+    owners      = ["136693071363"]  # Amazon
+  }
+{% endif %}
+}
+
+build {
+{% if TF_PROVIDER == "aws" %}
+  sources = ["source.amazon-ebs.{{SITE}}_internal_dns"]
+{% elif TF_PROVIDER == "digitalocean" %}
+  sources = ["source.digitalocean.{{SITE}}_internal_dns"]
+{% endif %}
+  provisioner "file" {
+    source      = "./keys/{{SITE}}-key_internal_dns.pub"
+    destination = "/tmp/{{SITE}}-key_internal_dns.pub"
+  }
+  provisioner "file" {
+    source      = "./content/dns/_etc_fstab"
+    destination = "/tmp/fstab"
+  }
+  provisioner "file" {
+    source      = "./content/dns/_etc_apparmor.d_usr.sbin.unbound"
+    destination = "/tmp/usr.sbin.unbound"
+  }
+  provisioner "shell" {
+    script = "./content/dns/packer-script.sh"
+  }
+}
+
+# Web Instance
+{% if TF_PROVIDER == "aws" %}
+source "amazon-ebs" "{{SITE}}_internal_web" {
+{% elif TF_PROVIDER == "digitalocean" %}
+source "digitalocean" "{{SITE}}_internal_web" {
+{% endif %}
+
+{% if TF_PROVIDER == "aws" %}
+  ami_name      = "{{SITE}}-internal-web-${local.timestamp}"
+  instance_type = "{{INSTANCE_TYPE_WEB}}"
+  access_key    = "{{API_KEY_1}}"
+  secret_key    = "{{API_KEY_2}}"
+{% elif TF_PROVIDER == "digitalocean" %}
+  snapshot_name = "{{SITE}}-internal-web-${local.timestamp}"
+  image         = "{{IMAGE_DNS}}"
+  size          = "{{INSTANCE_TYPE_WEB}}"
+  api_token     = "{{API_KEY_1}}"
+{% endif %}
+  region        = "{{TF_REGION}}"
+  ssh_username  = "{{USERNAME}}"
+
+{% if TF_PROVIDER == "aws" %}
+  source_ami_filter {
+    filters = {
+      image-id            = "{{IMAGE_DNS}}"
+      root-device-type    = "ebs"
+      virtualization-type = "hvm"
+    }
+    most_recent = true
+    owners      = ["136693071363"]  # Amazon
+  }
+{% endif %}
+}
+
+build {
+{% if TF_PROVIDER == "aws" %}
+  sources = ["source.amazon-ebs.{{SITE}}_internal_web"]
+{% elif TF_PROVIDER == "digitalocean" %}
+  sources = ["source.digitalocean.{{SITE}}_internal_web"]
+{% endif %}
+  provisioner "file" {
+    source      = "./keys/{{SITE}}-key_internal_web.pub"
+    destination = "/tmp/{{SITE}}-key_internal_web.pub"
+  }
+  provisioner "file" {
+    source      = "./content/web/{{SITE}}-webcontent.tar.gz"
+    destination = "/tmp/{{SITE}}-webcontent.tar.gz"
+  }
+  provisioner "shell" {
+    script = "./content/web/packer-script.sh"
+  }
+}
+
+# Mail Instance
+{% if TF_PROVIDER == "aws" %}
+source "amazon-ebs" "{{SITE}}_mail" {
+{% elif TF_PROVIDER == "digitalocean" %}
+source "digitalocean" "{{SITE}}_mail" {
+{% endif %}
+
+{% if TF_PROVIDER == "aws" %}
+  ami_name      = "{{SITE}}-internal-mail-${local.timestamp}"
+  instance_type = "{{INSTANCE_TYPE_MAIL}}"
+  access_key    = "{{API_KEY_1}}"
+  secret_key    = "{{API_KEY_2}}"
+{% elif TF_PROVIDER == "digitalocean" %}
+  snapshot_name = "{{SITE}}-internal-mail-${local.timestamp}"
+  image         = "{{IMAGE_MAIL}}"
+  size          = "{{INSTANCE_TYPE_MAIL}}"
+  api_token     = "{{API_KEY_1}}"
+{% endif %}
+  region        = "{{TF_REGION}}"
+  ssh_username  = "{{USERNAME}}"
+
+{% if TF_PROVIDER == "aws" %}
+  source_ami_filter {
+    filters = {
+      image-id            = "{{IMAGE_MAIL}}"
+      root-device-type    = "ebs"
+      virtualization-type = "hvm"
+    }
+    most_recent = true
+    owners      = ["136693071363"]  # Amazon
+  }
+{% endif %}
+}
+
+build {
+{% if TF_PROVIDER == "aws" %}
+  sources = ["source.amazon-ebs.{{SITE}}_mail"]
+{% elif TF_PROVIDER == "digitalocean" %}
+  sources = ["source.digitalocean.{{SITE}}_mail"]
+{% endif %}
+  provisioner "file" {
+    source      = "./keys/{{SITE}}-key_internal_mail.pub"
+    destination = "/tmp/{{SITE}}-key_internal_mail.pub"
+  }
+  provisioner "file" {
+    source      = "./content/mail/config"
+    destination = "/tmp/config"
+  }
+  provisioner "shell" {
+    script = "./content/mail/packer-script.sh"
+  }
+}
+
+# Internal Client Instance
+#{% if TF_PROVIDER == "aws" %}
+#source "amazon-ebs" "{{SITE}}_client" {
+#{% elif TF_PROVIDER == "digitalocean" %}
+#source "digitalocean" "{{SITE}}_client" {
+#{% endif %}
+#
+#{% if TF_PROVIDER == "aws" %}
+#  ami_name      = "{{SITE}}-internal-client-${local.timestamp}"
+#  instance_type = "{{INSTANCE_TYPE_CLIENT}}"
+#  access_key    = "{{API_KEY_1}}"
+#  secret_key    = "{{API_KEY_2}}"
+#{% elif TF_PROVIDER == "digitalocean" %}
+#  snapshot_name = "{{SITE}}-internal-client-${local.timestamp}"
+#  image         = "{{IMAGE_CLIENT}}"
+#  size          = "{{INSTANCE_TYPE_CLIENT}}"
+#  api_token     = "{{API_KEY_1}}"
+#{% endif %}
+#  region        = "{{TF_REGION}}"
+#  ssh_username  = "{{USERNAME}}"
+#
+#{% if TF_PROVIDER == "aws" %}
+#  source_ami_filter {
+#    filters = {
+#      image-id            = "{{IMAGE_CLIENT}}"
+#      root-device-type    = "ebs"
+#      virtualization-type = "hvm"
+#    }
+#    most_recent = true
+#    owners      = ["136693071363"]  # Amazon
+#  }
+#{% endif %}
+#}
+#
+#build {
+#{% if TF_PROVIDER == "aws" %}
+#  sources = ["source.amazon-ebs.{{SITE}}_internal_client"]
+#{% elif TF_PROVIDER == "digitalocean" %}
+#  sources = ["source.digitalocean.{{SITE}}_internal_client"]
+#{% endif %}
+#  provisioner "file" {
+#    source      = "./keys/{{SITE}}-key_internal_client.pub"
+#    destination = "/tmp/{{SITE}}-key_internal_client.pub"
+#  }
+#  provisioner "shell" {
+#    script = "./content/client/packer-script.sh"
+#  }
+#}

@@ -1,0 +1,3 @@
+/dev/urandom /etc/unbound/dev/urandom none bind 0 0
+/dev/log /etc/unbound/dev/log none bind 0 0
+

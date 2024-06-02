@@ -1,0 +1,603 @@
+{# site.tf #}
+locals {
+    region                 =  "{{TF_REGION}}"
+    availability_zone      =  "{{TF_AZ}}"
+# (TODO) PUT THESE IN A SEPARATE FILE ######################################
+    access_key             =  "{{API_KEY_1}}"
+    secret_key             =  "{{API_KEY_2}}"
+############################################################################
+    image_public           =  "{{IMAGE_PUBLIC}}"
+    image_dns              =  "{{IMAGE_DNS}}"
+    image_web              =  "{{IMAGE_WEB}}"
+    image_mail             =  "{{IMAGE_MAIL}}"
+    image_client           =  "{{IMAGE_CLIENT}}"
+    instance_type_public   =  "{{INSTANCE_TYPE_PUBLIC}}"
+    instance_type_dns      =  "{{INSTANCE_TYPE_DNS}}"
+    instance_type_web      =  "{{INSTANCE_TYPE_WEB}}"
+    instance_type_mail     =  "{{INSTANCE_TYPE_MAIL}}"
+    instance_type_client   =  "{{INSTANCE_TYPE_CLIENT}}"
+    vpc_cidr               =  "{{VPC_CIDR}}"
+    public_subnet_cidr     =  "{{PUBLIC_SUBNET_CIDR}}"
+    private_subnet_cidr    =  "{{PRIVATE_SUBNET_CIDR}}"
+}
+
+terraform {
+    required_providers {
+        {{TF_PROVIDER}} = {
+            source         =  "{{TF_PROVIDER_URN}}"
+        }
+    }
+}
+
+{% if TF_PROVIDER == "aws" %}
+# Find Images
+data "aws_ami" "{{SITE}}-ami-external" {
+    owners = ["self"]
+    filter {
+        name = "name"
+        values = ["{{SITE}}-external-*"]
+    }
+}
+
+data "aws_ami" "{{SITE}}-ami-internal-dns" {
+    owners = ["self"]
+    filter {
+        name = "name"
+        values = ["{{SITE}}-internal-dns-*"]
+    }
+}
+
+data "aws_ami" "{{SITE}}-ami-internal-web" {
+    owners = ["self"]
+    filter {
+        name = "name"
+        values = ["{{SITE}}-internal-web-*"]
+    }
+}
+
+data "aws_ami" "{{SITE}}-ami-internal-mail" {
+    owners = ["self"]
+    filter {
+        name = "name"
+        values = ["{{SITE}}-internal-mail-*"]
+    }
+}
+
+#data "aws_ami" "{{SITE}}-ami-internal-client" {
+#    owners = ["self"]
+#    filter {
+#        name = "name"
+#        values = ["{{SITE}}-internal_client-*"]
+#    }
+#}
+{% elif TF_PROVIDER == "digitalocean" %}
+
+data "digitalocean_droplet_snapshot" "{{SITE}}-image-external" {
+  name_regex  = "^{{SITE}}-external-*"
+  region      = "{{TF_REGION}}"
+  most_recent = true
+}
+
+data "digitalocean_droplet_snapshot" "{{SITE}}-image-internal-dns" {
+  name_regex  = "^{{SITE}}-internal-dns-*"
+  region      = "{{TF_REGION}}"
+  most_recent = true
+}
+
+data "digitalocean_droplet_snapshot" "{{SITE}}-image-internal-web" {
+  name_regex  = "^{{SITE}}-internal-web-*"
+  region      = "{{TF_REGION}}"
+  most_recent = true
+}
+
+data "digitalocean_droplet_snapshot" "{{SITE}}-image-internal-mail" {
+  name_regex  = "^{{SITE}}-internal-mail-*"
+  region      = "{{TF_REGION}}"
+  most_recent = true
+}
+
+#data "digitalocean_droplet_snapshot" "{{SITE}}-image-internal-client" {
+#  name_regex  = "^{{SITE}}-internal-client-*"
+#  region      = "{{TF_REGION}}"
+#  most_recent = true
+#}
+{% endif %}
+
+
+
+# Configure Provider
+provider "{{TF_PROVIDER}}" {
+{% if TF_PROVIDER == "aws" %}
+     region                 =  local.region
+     access_key             =  local.access_key
+     secret_key             =  local.secret_key
+{% elif TF_PROVIDER == "digitalocean" %}
+     token                  =  local.access_key
+{% endif %}
+}
+
+# Create a VPC
+resource "{{TF_PROVIDER}}_vpc" "{{SITE}}-vpc" {
+{% if TF_PROVIDER == "aws" %}
+    cidr_block              =  local.vpc_cidr
+    tags                    =  { Name = "{{SITE}}-vpc" }
+{% elif TF_PROVIDER == "digitalocean" %}
+    ip_range                =  local.vpc_cidr
+    region                  =  local.region
+    name                    =  "{{SITE}}-vpc"
+{% endif %}
+}
+
+{% if TF_PROVIDER == "aws" %}
+# Create an Elastic IP
+resource "aws_eip" "{{SITE}}-ngw-eip" {
+    tags                   =  { Name = "{{SITE}}-ngw-eip" }
+}
+
+
+# Create first subnet - will be attached to IGD
+resource "aws_subnet" "{{SITE}}-vpc-subnet_public" {
+    vpc_id                 = aws_vpc.{{SITE}}-vpc.id
+    cidr_block             = local.public_subnet_cidr
+    availability_zone      = local.availability_zone
+    tags                   = { Name = "{{SITE}}-vpc-subnet_public" }
+}
+
+# Create second subnet - will be 'private'
+resource "aws_subnet" "{{SITE}}-vpc-subnet_private" {
+    vpc_id                 = aws_vpc.{{SITE}}-vpc.id
+    cidr_block             = local.private_subnet_cidr
+    availability_zone      = local.availability_zone
+    tags                   = { Name = "{{SITE}}-vpc-subnet_private" }
+}
+
+
+# Create an Internet Gateway
+resource "aws_internet_gateway" "{{SITE}}-igw" {
+    vpc_id                 =  aws_vpc.{{SITE}}-vpc.id
+    tags                   = { Name = "{{SITE}}-igw" }
+}
+
+# Create a NAT Gateway
+resource "aws_nat_gateway" "{{SITE}}-ngw" {
+    allocation_id          =  aws_eip.{{SITE}}-ngw-eip.id
+    subnet_id              =  aws_subnet.{{SITE}}-vpc-subnet_public.id
+    tags                   =  { Name = "{{SITE}}-ngw" }
+}
+
+
+# Create Route Tables
+resource "aws_route_table" "{{SITE}}-rtb_public" {
+    vpc_id                 = aws_vpc.{{SITE}}-vpc.id
+    tags                   = { Name = "{{SITE}}-rtb_public" }
+
+    route {
+        cidr_block         = local.vpc_cidr
+        gateway_id         = "local"
+    }
+
+    route {
+        cidr_block         = "0.0.0.0/0"
+        gateway_id         = aws_internet_gateway.{{SITE}}-igw.id
+    }
+}
+
+resource "aws_route_table" "{{SITE}}-rtb_private" {
+    vpc_id                 = aws_vpc.{{SITE}}-vpc.id
+    tags                   = { Name = "{{SITE}}-rtb_private" }
+
+    route {
+        cidr_block         = local.vpc_cidr
+        gateway_id         = "local"
+    }
+
+    route {
+        cidr_block         = "0.0.0.0/0"
+        gateway_id         = aws_nat_gateway.{{SITE}}-ngw.id
+    }
+}
+
+
+# Associate subnets to route table
+resource "aws_route_table_association" "{{SITE}}-rtb_subnet_public" {
+    subnet_id              = aws_subnet.{{SITE}}-vpc-subnet_public.id
+    route_table_id         = aws_route_table.{{SITE}}-rtb_public.id
+}
+resource "aws_route_table_association" "{{SITE}}-rtb_subnet_private" {
+    subnet_id              = aws_subnet.{{SITE}}-vpc-subnet_private.id
+    route_table_id         = aws_route_table.{{SITE}}-rtb_private.id
+}
+
+
+# Set route table as main for the site VPC
+resource "aws_main_route_table_association" "{{SITE}}-rtb_main" {
+    vpc_id                 = aws_vpc.{{SITE}}-vpc.id
+    route_table_id         = aws_route_table.{{SITE}}-rtb_public.id
+}
+{% endif %}
+
+{% if TF_PROVIDER == "aws" %}
+# Create the external Security Group (AWS = before instance stand-up)
+resource "aws_security_group" "{{SITE}}-sg_external" {
+    name                   =  "{{SITE}}-sg_external"
+    description            =  "{{SITE}} External Security Group"
+    vpc_id                 =  aws_vpc.{{SITE}}-vpc.id
+    tags                   =  { Name = "{{SITE}}-sg_external" }
+}
+    resource "aws_vpc_security_group_ingress_rule" "ingress-ssh" {
+        security_group_id  =  aws_security_group.{{SITE}}-sg_external.id
+        cidr_ipv4          =  "0.0.0.0/0"
+        ip_protocol        =  "tcp"
+        from_port          =  22
+        to_port            =  22
+}
+    resource "aws_vpc_security_group_ingress_rule" "ingress-ssh-high" {
+        security_group_id  =  aws_security_group.{{SITE}}-sg_external.id
+        cidr_ipv4          =  "0.0.0.0/0"
+        ip_protocol        =  "tcp"
+        from_port          =  20022
+        to_port            =  20022
+}
+    resource "aws_vpc_security_group_ingress_rule" "ingress-ssh_internal" {
+        security_group_id  =  aws_security_group.{{SITE}}-sg_external.id
+        cidr_ipv4          =  "0.0.0.0/0"
+        ip_protocol        =  "tcp"
+        from_port          =  10001
+        to_port            =  10003
+}
+    resource "aws_vpc_security_group_ingress_rule" "ingress-http" {
+        security_group_id  =  aws_security_group.{{SITE}}-sg_external.id
+        cidr_ipv4          =  "0.0.0.0/0"
+        ip_protocol        =  "tcp"
+        from_port          =  80
+        to_port            =  80
+}
+    resource "aws_vpc_security_group_ingress_rule" "ingress-https" {
+        security_group_id  =  aws_security_group.{{SITE}}-sg_external.id
+        cidr_ipv4          =  "0.0.0.0/0"
+        ip_protocol        =  "tcp"
+        from_port          =  443
+        to_port            =  443
+}
+    resource "aws_vpc_security_group_ingress_rule" "ingress-rdp" {
+        security_group_id  =  aws_security_group.{{SITE}}-sg_external.id
+        cidr_ipv4          =  "0.0.0.0/0"
+        ip_protocol        =  "tcp"
+        from_port          =  3389
+        to_port            =  3389
+}
+    resource "aws_vpc_security_group_ingress_rule" "ingress-dns" {
+        security_group_id  =  aws_security_group.{{SITE}}-sg_external.id
+        cidr_ipv4          =  "0.0.0.0/0"
+        ip_protocol        =  "udp"
+        from_port          =  53
+        to_port            =  53
+}
+    resource "aws_vpc_security_group_ingress_rule" "ingress-icmp-public" {
+        security_group_id  =  aws_security_group.{{SITE}}-sg_external.id
+        cidr_ipv4          =  "0.0.0.0/0"
+        ip_protocol        =  "icmp"
+        from_port          =  -1
+        to_port            =  -1
+}
+    resource "aws_vpc_security_group_egress_rule" "egress_external" {
+        security_group_id  =  aws_security_group.{{SITE}}-sg_external.id
+        cidr_ipv4          =  "0.0.0.0/0"
+        ip_protocol        =  -1
+}
+
+# Create the internal Security Group
+resource "aws_security_group" "{{SITE}}-sg_internal" {
+    name                   =  "{{SITE}}-sg_internal"
+    description            =  "{{SITE}} Internal Security Group"
+    vpc_id                 =  aws_vpc.{{SITE}}-vpc.id
+    tags                   =  { Name = "{{SITE}}-sg_internal" }
+}
+    resource "aws_vpc_security_group_ingress_rule" "ingress" {
+        security_group_id  =  aws_security_group.{{SITE}}-sg_internal.id
+        cidr_ipv4          =  "0.0.0.0/0"
+        ip_protocol        =  -1
+}
+    resource "aws_vpc_security_group_ingress_rule" "ingress-icmp-private" {
+        security_group_id  =  aws_security_group.{{SITE}}-sg_internal.id
+        cidr_ipv4          =  "0.0.0.0/0"
+        ip_protocol        =  "icmp"
+        from_port          =  -1
+        to_port            =  -1
+}
+
+    resource "aws_vpc_security_group_egress_rule" "egress_internal" {
+        security_group_id  =  aws_security_group.{{SITE}}-sg_internal.id
+        cidr_ipv4          =  "0.0.0.0/0"
+        ip_protocol        =  -1
+}
+{% endif %}
+
+# Import Keys
+{% if TF_PROVIDER == "aws" %}
+resource "aws_key_pair" "{{SITE}}-key_external" {
+    key_name = "{{SITE}}-key_external"
+    public_key = "${file("keys/{{SITE}}-key_external.pub")}"
+{% elif TF_PROVIDER == "digitalocean" %}
+resource "digitalocean_ssh_key" "{{SITE}}-key_external" {
+  name       = "{{SITE}}-key_external"
+  public_key = file("keys/{{SITE}}-key_external.pub")
+{% endif %}
+}
+
+{% if TF_PROVIDER == "aws" %}
+resource "aws_key_pair" "{{SITE}}-key_internal_dns" {
+    key_name = "{{SITE}}-key_internal_dns"
+    public_key = "${file("keys/{{SITE}}-key_internal_dns.pub")}"
+{% elif TF_PROVIDER == "digitalocean" %}
+resource "digitalocean_ssh_key" "{{SITE}}-key_internal_dns" {
+  name       = "{{SITE}}-key_internal_dns"
+  public_key = file("keys/{{SITE}}-key_internal_dns.pub")
+{% endif %}
+}
+
+{% if TF_PROVIDER == "aws" %}
+resource "aws_key_pair" "{{SITE}}-key_internal_web" {
+    key_name = "{{SITE}}-key_internal_web"
+    public_key = "${file("keys/{{SITE}}-key_internal_web.pub")}"
+{% elif TF_PROVIDER == "digitalocean" %}
+resource "digitalocean_ssh_key" "{{SITE}}-key_internal_web" {
+  name       = "{{SITE}}-key_internal_web"
+  public_key = file("keys/{{SITE}}-key_internal_web.pub")
+{% endif %}
+}
+
+{% if TF_PROVIDER == "aws" %}
+resource "aws_key_pair" "{{SITE}}-key_internal_mail" {
+    key_name = "{{SITE}}-key_internal_mail"
+    public_key = "${file("keys/{{SITE}}-key_internal_mail.pub")}"
+{% elif TF_PROVIDER == "digitalocean" %}
+resource "digitalocean_ssh_key" "{{SITE}}-key_internal_mail" {
+  name       = "{{SITE}}-key_internal_mail"
+  public_key = file("keys/{{SITE}}-key_internal_mail.pub")
+{% endif %}
+}
+
+{% if TF_PROVIDER == "aws" %}
+resource "aws_key_pair" "{{SITE}}-key_internal_client" {
+    key_name = "{{SITE}}-key_internal_client"
+    public_key = "${file("keys/{{SITE}}-key_internal_client.pub")}"
+{% elif TF_PROVIDER == "digitalocean" %}
+resource "digitalocean_ssh_key" "{{SITE}}-key_internal_client" {
+  name       = "{{SITE}}-key_internal_client"
+  public_key = file("keys/{{SITE}}-key_internal_client.pub")
+{% endif %}
+}
+
+# Create the Internet-facing Instance
+{% if TF_PROVIDER == "aws" %}
+resource "aws_instance" "{{SITE}}-public" {
+    ami                         = data.aws_ami.{{SITE}}-ami-external.id
+    instance_type               = local.instance_type_public
+    key_name                    = "{{SITE}}-key_external"
+    subnet_id                   = aws_subnet.{{SITE}}-vpc-subnet_public.id
+    associate_public_ip_address = true
+    vpc_security_group_ids      = [aws_security_group.{{SITE}}-sg_external.id]
+    tags                        = { Name = "{{SITE}}-public" }
+    ##########
+#    user_data                   = <<-EOF
+#        #!/bin/bash
+#        systemctl enable ssh.service
+#        systemctl start ssh.service
+#        apt-get update
+#        EOF
+    ##########
+}
+{% elif TF_PROVIDER == "digitalocean" %}
+resource "digitalocean_droplet" "{{SITE}}-public" {
+  image    = data.digitalocean_droplet_snapshot.{{SITE}}-image-external.id
+  region   = local.region
+  size     = local.instance_type_public
+  vpc_uuid = digitalocean_vpc.{{SITE}}-vpc.id
+  ssh_keys = [digitalocean_ssh_key.{{SITE}}-key_external.fingerprint]
+  name     = "{{SITE}}-public"
+}
+{% endif %}
+
+# Create the DNS server Instance
+{% if TF_PROVIDER == "aws" %}
+resource "aws_instance" "{{SITE}}-internal_dns" {
+    ami                         = data.aws_ami.{{SITE}}-ami-internal-dns.id
+    instance_type               =  local.instance_type_dns
+    key_name                    =  "{{SITE}}-key_internal_dns"
+    subnet_id                   = aws_subnet.{{SITE}}-vpc-subnet_private.id
+    associate_public_ip_address = false
+    vpc_security_group_ids      =  [aws_security_group.{{SITE}}-sg_internal.id]
+    tags                        =  { Name = "{{SITE}}-internal_dns" }
+    ##########
+#    user_data                   = <<-EOF
+#        #!/bin/bash
+#        systemctl enable ssh.service
+#        systemctl start ssh.service
+#        apt-get update
+#        EOF
+    ##########
+}
+{% elif TF_PROVIDER == "digitalocean" %}
+resource "digitalocean_droplet" "{{SITE}}-internal-dns" {
+  image    = data.digitalocean_droplet_snapshot.{{SITE}}-image-internal-dns.id
+  region   = local.region
+  size     = local.instance_type_dns
+  vpc_uuid = digitalocean_vpc.{{SITE}}-vpc.id
+  ssh_keys = [digitalocean_ssh_key.{{SITE}}-key_internal_dns.fingerprint]
+  name     = "{{SITE}}-internal-dns"
+}
+{% endif %}
+
+# Create the web server Instance
+{% if TF_PROVIDER == "aws" %}
+resource "aws_instance" "{{SITE}}-internal_web" {
+    ami                         = data.aws_ami.{{SITE}}-ami-internal-web.id
+    instance_type               =  local.instance_type_web
+    key_name                    =  "{{SITE}}-key_internal_web"
+    subnet_id                   = aws_subnet.{{SITE}}-vpc-subnet_private.id
+    associate_public_ip_address = false
+    vpc_security_group_ids      =  [aws_security_group.{{SITE}}-sg_internal.id]
+    tags                        =  { Name = "{{SITE}}-internal_web" }
+    ##########
+#    user_data                   = <<-EOF
+#        #!/bin/bash
+#        systemctl enable ssh.service
+#        systemctl start ssh.service
+#        apt-get update
+#        EOF
+    ##########
+}
+{% elif TF_PROVIDER == "digitalocean" %}
+resource "digitalocean_droplet" "{{SITE}}-internal-web" {
+  image    = data.digitalocean_droplet_snapshot.{{SITE}}-image-internal-web.id
+  region   = local.region
+  size     = local.instance_type_web
+  vpc_uuid = digitalocean_vpc.{{SITE}}-vpc.id
+  ssh_keys = [digitalocean_ssh_key.{{SITE}}-key_internal_web.fingerprint]
+  name     = "{{SITE}}-internal-web"
+}
+{% endif %}
+
+# Create the Mail server Instance
+{% if TF_PROVIDER == "aws" %}
+resource "aws_instance" "{{SITE}}-internal_mail" {
+    ami                         = data.aws_ami.{{SITE}}-ami-internal-mail.id
+    instance_type               =  local.instance_type_mail
+    key_name                    =  "{{SITE}}-key_internal_mail"
+    subnet_id                   = aws_subnet.{{SITE}}-vpc-subnet_private.id
+    associate_public_ip_address = false
+    vpc_security_group_ids      =  [aws_security_group.{{SITE}}-sg_internal.id]
+    tags                        =  { Name = "{{SITE}}-internal_mail" }
+    ##########
+#    user_data                   = <<-EOF
+#        #!/bin/bash
+#        systemctl enable ssh.service
+#        systemctl start ssh.service
+#        apt-get update
+#        EOF
+    ##########
+}
+{% elif TF_PROVIDER == "digitalocean" %}
+resource "digitalocean_droplet" "{{SITE}}-internal-mail" {
+  image    = data.digitalocean_droplet_snapshot.{{SITE}}-image-internal-mail.id
+  region   = local.region
+  size     = local.instance_type_mail
+  vpc_uuid = digitalocean_vpc.{{SITE}}-vpc.id
+  ssh_keys = [digitalocean_ssh_key.{{SITE}}-key_internal_mail.fingerprint]
+  name     = "{{SITE}}-internal-mail"
+}
+{% endif %}
+
+# Create the Internal Client Instance
+{% if TF_PROVIDER == "aws" %}
+resource "aws_instance" "{{SITE}}-internal_client" {
+    ami                         =  local.image_client
+    instance_type               =  local.instance_type_client
+    key_name                    =  "{{SITE}}-key_internal_client"
+    subnet_id                   =  aws_subnet.{{SITE}}-vpc-subnet_private.id
+    associate_public_ip_address =  false
+    vpc_security_group_ids      =  [aws_security_group.{{SITE}}-sg_internal.id]
+    tags                        =  { Name = "{{SITE}}-internal_client" }
+}
+{% elif TF_PROVIDER == "digitalocean" %}
+resource "digitalocean_droplet" "{{SITE}}-internal-client" {
+  image    = local.image_client
+  region   = local.region
+  size     = local.instance_type_client
+  vpc_uuid = digitalocean_vpc.{{SITE}}-vpc.id
+  ssh_keys = [digitalocean_ssh_key.{{SITE}}-key_internal_client.fingerprint]
+  name     = "{{SITE}}-internal-client"
+}
+{% endif %}
+
+
+{% if TF_PROVIDER == "digitalocean" %}
+# Create Firewall Rules (Digital Ocean = after instance stand-up)
+resource "digitalocean_firewall" "{{SITE}}-sg_external" {
+    name = "{{SITE}}-sg-external"
+    droplet_ids = [digitalocean_droplet.{{SITE}}-public.id]
+
+    inbound_rule {
+        protocol = "tcp"
+        port_range = "22"
+        source_addresses = ["0.0.0.0/0"]
+    }
+
+    inbound_rule {
+        protocol = "tcp"
+        port_range = "80"
+        source_addresses = ["0.0.0.0/0"]
+    }
+
+    inbound_rule {
+        protocol = "tcp"
+        port_range = "443"
+        source_addresses = ["0.0.0.0/0"]
+    }
+
+    inbound_rule {
+        protocol = "tcp"
+        port_range = "3389"
+        source_addresses = ["0.0.0.0/0"]
+    }
+
+    inbound_rule {
+        protocol = "tcp"
+        port_range = "10001-10003"
+        source_addresses = ["0.0.0.0/0"]
+    }
+
+    inbound_rule {
+        protocol = "tcp"
+        port_range = "20022"
+        source_addresses = ["0.0.0.0/0"]
+    }
+
+    inbound_rule {
+        protocol = "udp"
+        port_range = "53"
+        source_addresses = ["0.0.0.0/0"]
+    }
+
+    inbound_rule {
+        protocol = "icmp"
+        source_addresses = ["0.0.0.0/0"]
+    }
+
+    outbound_rule {
+        protocol = "tcp"
+        port_range = "1-65535"
+        destination_addresses = ["0.0.0.0/0"]
+    }
+
+    outbound_rule {
+        protocol = "udp"
+        port_range = "1-65535"
+        destination_addresses = ["0.0.0.0/0"]
+    }
+
+    outbound_rule {
+        protocol = "icmp"
+        destination_addresses = ["0.0.0.0/0"]
+    }
+
+}
+{% endif %}
+
+# Feedback IP information
+{% if TF_PROVIDER == "aws" %}
+output "{{SITE}}-ip_public"       { value = aws_instance.{{SITE}}-public.public_ip }
+output "{{SITE}}-ip_ext_private"  { value = aws_instance.{{SITE}}-public.private_ip }
+output "{{SITE}}-ip_dns"          { value = aws_instance.{{SITE}}-internal_dns.private_ip }
+output "{{SITE}}-ip_web"          { value = aws_instance.{{SITE}}-internal_web.private_ip }
+output "{{SITE}}-ip_mail"         { value = aws_instance.{{SITE}}-internal_mail.private_ip }
+output "{{SITE}}-ip_client"       { value = aws_instance.{{SITE}}-internal_client.private_ip }
+{% elif TF_PROVIDER == "digitalocean" %}
+output "{{SITE}}-ip_public"       { value = digitalocean_droplet.{{SITE}}-public.ipv4_address }
+output "{{SITE}}-ip_ext_private"  { value = digitalocean_droplet.{{SITE}}-public.ipv4_address_private }
+output "{{SITE}}-ip_dns"          { value = digitalocean_droplet.{{SITE}}-internal-dns.ipv4_address_private }
+output "{{SITE}}-ip_web"          { value = digitalocean_droplet.{{SITE}}-internal-web.ipv4_address_private }
+output "{{SITE}}-ip_mail"         { value = digitalocean_droplet.{{SITE}}-internal-mail.ipv4_address_private }
+output "{{SITE}}-ip_client"       { value = digitalocean_droplet.{{SITE}}-internal-client.ipv4_address_private }
+{% endif %}

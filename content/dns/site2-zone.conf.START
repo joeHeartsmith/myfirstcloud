@@ -1,0 +1,45 @@
+server:
+        num-threads: 4
+        interface: 0.0.0.0
+        do-ip4: yes
+        use-systemd: yes
+        access-control: 192.168.0.0/16 allow
+        access-control: 127.0.0.1/8 allow
+        access-control: ::1/128 allow
+        chroot: "/etc/unbound"
+        username: unbound
+        directory: "/etc/unbound"
+        logfile: "/etc/unbound/unbound.log"
+        pidfile: "/etc/unbound/unbound.pid"
+        root-hints: "/etc/unbound/unbound.conf.d/named.root"
+        hide-identity: yes
+        hide-version: yes
+        use-caps-for-id: yes
+        private-address: 192.168.0.0/16
+        private-domain: site1.test
+
+        local-zone: "site1.test." static
+        local-data: "site1.test. IN SOA site1.test admin.site1.test 1 3600 1200 604800 10800"
+
+            local-data: "site1.test. 10800 IN A EXTERNAL_IP"
+            local-data-ptr: "EXTERNAL_IP site1.test"
+
+            local-data: "www.site1.test. 10800 IN A EXTERNAL_IP"
+            local-data-ptr: "EXTERNAL_IP www.site1.test"
+
+            local-data: "site1.test. IN MX 10 mail.site1.test."
+
+            local-data: "mail.site1.test. 10800 IN A MAIL_IP"
+            local-data-ptr: "MAIL_IP www.site1.test"
+
+            local-data: "smtp.site1.test. 10800 IN A MAIL_IP"
+            local-data-ptr: "MAIL_IP www.site1.test"
+
+        forward-zone:
+        name: "."
+        forward-addr: 1.1.1.1
+        forward-addr: 1.0.0.1
+        forward-addr: 208.67.222.222
+        forward-addr: 208.67.220.220
+        forward-addr: 8.8.8.8
+        forward-addr: 8.8.4.4

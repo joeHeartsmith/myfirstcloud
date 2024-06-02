@@ -1,0 +1,19 @@
+#!/bin/bash
+
+case "$1" in
+    aws)
+        rm -f ./CONFIG
+        ln -fs ./template/CONFIG_AWS ./CONFIG
+    ;;
+    "do")
+        rm -f ./CONFIG
+        ln -fs ./template/CONFIG_DO ./CONFIG
+    ;;
+    *)
+        echo Usage:
+        echo $0 PROVIDER SITE-NAME
+esac
+
+rm -f ./Makefile
+cp ./template/Makefile ./
+sed -i "s/SITENAME/$2/g" ./Makefile
